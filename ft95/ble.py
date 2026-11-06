@@ -136,11 +136,12 @@ class FT95Watcher:
                         await asyncio.sleep(5)
                         continue
                     try:
-                        await asyncio.wait_for(received.wait(), timeout=8)
-                        deadline = asyncio.get_event_loop().time() + 6.0
+                        await asyncio.wait_for(received.wait(), timeout=30)
+                        out(f"Première valeur reçue, réception du lot…")
+                        deadline = asyncio.get_event_loop().time() + 10.0
                         while asyncio.get_event_loop().time() < deadline:
                             n = len(self.batch)
-                            await asyncio.sleep(1.5)
+                            await asyncio.sleep(2)
                             if len(self.batch) == n:
                                 break
                         out("Lot reçu : " + ", ".join(f"{m.temperature_c:.1f}" for m in self.batch))
