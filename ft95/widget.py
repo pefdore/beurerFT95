@@ -79,5 +79,6 @@ def run_widget(ble_thread_target) -> None:
     data_queue: "queue.Queue[str]" = queue.Queue()
     threading.Thread(target=ble_thread_target, args=(data_queue,), daemon=True).start()
     app = QApplication(sys.argv)
-    TempWidget(data_queue)
+    widget = TempWidget(data_queue)
+    widget.show()
     sys.exit(app.exec())
