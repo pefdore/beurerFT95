@@ -62,7 +62,7 @@ def cmd_spy(args: argparse.Namespace) -> int:
 
 def cmd_watch(args: argparse.Namespace) -> int:
     store = get_store()
-    address = args.address
+    address = getattr(args, "address_opt", None) or getattr(args, "address_pos", None)
 
     def pick_device():
         return find_ft95()
@@ -168,7 +168,8 @@ def main(argv=None) -> int:
     p.set_defaults(func=cmd_spy)
 
     p = sub.add_parser("watch", help="Écoute le FT95 et affiche les mesures (fenêtre + presse-papiers).")
-    p.add_argument("--address", help="Adresse MAC du FT95 (si le nom n'est pas détecté).")
+    p.add_argument("address_pos", nargs="?", help="Adresse MAC du FT95 (optionnelle, positionnelle ou via --address).")
+    p.add_argument("--address", dest="address_opt", help="Adresse MAC du FT95 (si le nom n'est pas détecté).")
     p.add_argument("--no-gui", action="store_true", help="Affichage en console uniquement.")
     p.set_defaults(func=cmd_watch)
 
