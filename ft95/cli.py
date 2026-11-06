@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 
 from . import __version__
-from .ble import FT95Watcher, dump_gatt, find_ft95, looks_like_ft95, scan
+from .ble import FT95Watcher, describe_adv, dump_gatt, find_ft95, listen_passive, looks_like_ft95, scan, scan_detailed
 from .clipboard import copy_text
 from .decode import Measurement, make_measurement
 from .storage import MeasurementStore, load_history
@@ -27,10 +27,35 @@ def get_store() -> MeasurementStore:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     print(f"Scan BLE pendant {args.duration}s…")
-    devices = asyncio.run(scan(args.duration))
-    for d in sorted(devices, key=lambda x: (x.name or "").lower()):
-        marker = "  <-- probable FT95" if looks_like_ft95(d.name) else ""
-        print(f"{d.address}  {d.name or '(sans nom)'}{marker}")
+    results = asyncio.run(scan_detailed(args.duration))
+    for device, adv in sorted(results, key=lambda x: (x[1].local_name or "").lower()):
+        marker = "  <-- probable FT95" if looks_like_ft95(adv.local_name or device.name or "") else ""
+        print(f"{device.address}  {adv.local_name or device.name or '(sans nom)'}{marker}")
+        if args.details:
+            print(f"    {describe_adv(adv)}")
+    return 0
+
+
+def cmd_listen(args: argparse.Namespace) -> int:
+    print("Écoute passive des annonces du FT95 (Ctrl+C pour arrêter).")
+    print("Prenez une mesure : chaque annonce reçue sera affichée.")
+    from .decode import decode_heuristic
+
+    def on_adv(device, adv) -> None:
+        print(f"[{device.address}] {describe_adv(adv)}")
+        for data in (adv.service_data or {}).values():
+            t = decode_heuristic(bytes(data))
+            if t:
+                print(f"    -> température probable : {t:.1f} °C")
+        for data in (adv.manufacturer_data or {}).values():
+            t = decode_heuristic(bytes(data))
+            if t:
+                print(f"    -> température probable : {t:.1f} °C")
+
+    try:
+        asyncio.run(listen_passive(on_adv))
+    except KeyboardInterrupt:
+        pass
     return 0
 
 
@@ -223,7 +248,11 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("scan", help="Liste les appareils BLE à portée (10s par défaut).")
     p.add_argument("--duration", type=float, default=10.0)
+    p.add_argument("--details", action="store_true", help="Affiche le contenu des annonces (data fabricant, RSSI…).")
     p.set_defaults(func=cmd_scan)
+
+    p = sub.add_parser("listen", help="Écoute passive continue des annonces du FT95 (sans connexion).")
+    p.set_defaults(func=cmd_listen)
 
     p = sub.add_parser("gatt", help="Liste les services/caractéristiques d'un appareil.")
     p.add_argument("address")

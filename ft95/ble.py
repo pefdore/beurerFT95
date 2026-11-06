@@ -24,6 +24,49 @@ def looks_like_ft95(name: Optional[str]) -> bool:
     return any(h in low for h in NAME_HINTS)
 
 
+async def scan_detailed(duration: float = 10.0):
+    """Scan passif : renvoie (appareil, annonce) pour chaque périphérique détecté.
+
+    Garde la dernière annonce reçue par appareil.
+    """
+    found: dict = {}
+
+    def _cb(device: BLEDevice, adv: AdvertisementData) -> None:
+        found[device.address] = (device, adv)
+
+    scanner = BleakScanner(detection_callback=_cb)
+    await scanner.start()
+    await asyncio.sleep(duration)
+    await scanner.stop()
+    return list(found.values())
+
+
+def describe_adv(adv: AdvertisementData) -> str:
+    parts = [f"RSSI={adv.rssi}"]
+    if adv.local_name:
+        parts.append(f"nom={adv.local_name!r}")
+    if adv.service_uuids:
+        parts.append("services=" + ", ".join(adv.service_uuids))
+    for uuid, data in (adv.service_data or {}).items():
+        parts.append(f"service_data[{uuid}]={bytes(data).hex(' ')}")
+    for cid, data in (adv.manufacturer_data or {}).items():
+        parts.append(f"manufacturer[{cid:#06x}]={bytes(data).hex(' ')}")
+    return "  ".join(parts)
+
+
+async def listen_passive(on_adv, duration: float = 3600.0) -> None:
+    """Écoute passive continue : appelle on_adv(appareil, annonce) à chaque annonce du FT95."""
+
+    def _cb(device: BLEDevice, adv: AdvertisementData) -> None:
+        if looks_like_ft95(adv.local_name or device.name or ""):
+            on_adv(device, adv)
+
+    scanner = BleakScanner(detection_callback=_cb)
+    await scanner.start()
+    await asyncio.sleep(duration)
+    await scanner.stop()
+
+
 async def scan(duration: float = 10.0) -> List[BLEDevice]:
     devices = await BleakScanner.discover(timeout=duration)
     return list(devices)
