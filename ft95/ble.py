@@ -82,38 +82,54 @@ class FT95Watcher:
             self.on_measurement(make_measurement(temp, data, source))
 
     async def run_forever(self, out=print) -> None:
-        device = await self.device_provider()
-        if not device:
-            out("FT95 introuvable.")
-            return
-        out(f"Connecté à {device.name} ({device.address})")
-        async with BleakClient(device) as client:
+        """Boucle : se connecte, attend UNE mesure, se déconnecte, puis recommence.
+
+        Le FT95 ne peut pas mesurer pendant qu'il est connecté et ne re-pousse pas une
+        mesure déjà envoyée : il faut donc le libérer après chaque mesure.
+        """
+        while True:
+            device = await self.device_provider()
+            if not device:
+                out("FT95 introuvable, nouvelle tentative dans 5s…")
+                await asyncio.sleep(5)
+                continue
+            out(f"Connecté à {device.name} ({device.address}) — en attente d'une mesure…")
+            received = asyncio.Event()
+            prev = self.on_measurement
+
+            def wrapped(m) -> None:
+                prev(m)
+                received.set()
+
+            self.on_measurement = wrapped
             try:
-                if await client.pair():
-                    out("Jumelage Bluetooth réussi.")
-            except Exception as exc:
-                out(f"Jumelage impossible ({exc}) — jumelez le FT95 dans les paramètres Bluetooth de Windows si les mesures n'arrivent pas.")
-            targets: List[str] = []
-            for service in client.services:
-                for char in service.characteristics:
-                    props = char.properties
-                    if char.uuid.lower() == "00002a05-0000-1000-8000-00805f9b34fb":
+                async with BleakClient(device, disconnected_callback=lambda c: received.set()) as client:
+                    targets: List[str] = []
+                    for service in client.services:
+                        for char in service.characteristics:
+                            props = char.properties
+                            if char.uuid.lower() == "00002a05-0000-1000-8000-00805f9b34fb":
+                                continue
+                            if "indicate" in props or "notify" in props:
+                                targets.append(char.uuid)
+                    active = 0
+                    for uuid in targets:
+                        try:
+                            await client.start_notify(uuid, lambda d, data, u=uuid: asyncio.ensure_future(self._handle(u, data)))
+                            active += 1
+                        except Exception as exc:
+                            out(f"Écoute impossible sur {uuid} : {exc}")
+                    if active == 0:
+                        out("Aucune écoute possible : réessayez, ou jumelez le FT95 dans les paramètres Bluetooth.")
+                        await asyncio.sleep(5)
                         continue
-                    if "indicate" in props or "notify" in props:
-                        targets.append(char.uuid)
-            if not targets:
-                out("Aucune caractéristique notifiable trouvée.")
-                return
-            out(f"Écoute de {len(targets)} caractéristique(s) : {', '.join(targets)}")
-            active = 0
-            for uuid in targets:
-                try:
-                    await client.start_notify(uuid, lambda d, data, u=uuid: asyncio.ensure_future(self._handle(u, data)))
-                    active += 1
-                except Exception as exc:
-                    out(f"Écoute impossible sur {uuid} : {exc}")
-            if active == 0:
-                out("Aucune écoute possible : jumelez le FT95 dans les paramètres Bluetooth de Windows, puis relancez.")
-                return
-            while True:
-                await asyncio.sleep(1)
+                    try:
+                        await asyncio.wait_for(received.wait(), timeout=120)
+                        out("Mesure reçue — déconnexion pour libérer le thermomètre…")
+                    except asyncio.TimeoutError:
+                        out("Aucune mesure en 120s — reconnexion…")
+            except Exception as exc:
+                out(f"Connexion perdue ({exc}) — nouvelle tentative dans 5s…")
+            finally:
+                self.on_measurement = prev
+            await asyncio.sleep(2)
