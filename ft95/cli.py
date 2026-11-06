@@ -116,21 +116,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     store = get_store()
     address = getattr(args, "address_opt", None) or getattr(args, "address_pos", None)
 
-    def pick_device():
-        return find_ft95()
-
-    async def resolve_device():
-        if address:
-            from bleak import BleakScanner
-
-            d = await BleakScanner.find_device_by_address(address, timeout=15.0)
-            if not d:
-                raise SystemExit(f"Aucun appareil à l'adresse {address}. Lancez 'ft95 scan'.")
-            return d
-        d = await find_ft95()
-        if not d:
-            raise SystemExit("FT95 introuvable. Lancez 'ft95 scan' pour identifier son nom/adresse.")
-        return d
+    timings = {"wait_first": args.wait_first, "collect": args.collect, "free": args.free}
 
     if args.no_gui:
         def on_measurement(m: Measurement) -> None:
@@ -138,10 +124,9 @@ def cmd_watch(args: argparse.Namespace) -> int:
             copy_text(f"{m.temperature_c:.1f}")
             print(f"Mesure : {m.display()} à {m.timestamp.strftime('%H:%M:%S')} — copiée dans le presse-papiers")
 
-        timings = {"wait_first": args.wait_first, "collect": args.collect, "free": args.free}
-        watcher = FT95Watcher(resolve_device, on_measurement)
+        watcher = FT95Watcher(lambda: None, on_measurement)
         try:
-            watcher.run_cycles(**timings)
+            watcher.run_cycles(address=address, **timings)
         except KeyboardInterrupt:
             pass
         return 0
@@ -155,10 +140,9 @@ def cmd_watch(args: argparse.Namespace) -> int:
         def on_measurement(m: Measurement) -> None:
             q.put(m)
 
-        timings = {"wait_first": args.wait_first, "collect": args.collect, "free": args.free}
-        watcher = FT95Watcher(resolve_device, on_measurement)
+        watcher = FT95Watcher(lambda: None, on_measurement)
         try:
-            watcher.run_cycles(**timings)
+            watcher.run_cycles(address=address, **timings)
         except Exception as exc:
             print(f"BLE arrêté : {exc}", file=sys.stderr)
 
@@ -181,22 +165,9 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 
 def _run_ble(on_measurement, address=None, out=print, timings=None) -> None:
-    async def resolve_device():
-        if address:
-            from bleak import BleakScanner
-
-            d = await BleakScanner.find_device_by_address(address, timeout=15.0)
-            if not d:
-                raise SystemExit(f"Aucun appareil à l'adresse {address}. Lancez 'ft95 scan'.")
-            return d
-        d = await find_ft95()
-        if not d:
-            raise SystemExit("FT95 introuvable. Allumez-le (ou prenez une mesure) et relancez, ou 'ft95 scan'.")
-        return d
-
-    watcher = FT95Watcher(resolve_device, on_measurement)
+    watcher = FT95Watcher(lambda: None, on_measurement)
     try:
-        watcher.run_cycles(out=out, **(timings or {}))
+        watcher.run_cycles(out=out, address=address, **(timings or {}))
     except Exception as exc:
         print(f"BLE arrêté : {exc}", file=sys.stderr)
 

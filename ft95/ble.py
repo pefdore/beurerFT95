@@ -112,6 +112,7 @@ class FT95Watcher:
         self.log_raw = log_raw
         self.batching = False
         self.batch: List[Measurement] = []
+        self.last_batch_size = 0
         self._first_item: Optional[asyncio.Event] = None
 
     async def _handle(self, char_uuid: str, data: bytes) -> None:
@@ -184,30 +185,12 @@ class FT95Watcher:
             self.batching = False
         if not self.batch:
             return
+        self.last_batch_size = len(self.batch)
         out("Lot reçu : " + ", ".join(f"{m.temperature_c:.1f}" for m in self.batch))
-        stamped = [m for m in self.batch if m.device_time is not None]
-        unseen = [m for m in self.batch if m.raw not in state["seen_raws"]]
-        grew = len(self.batch) > state["prev_batch_size"]
-        if stamped:
-            last = max(stamped, key=lambda m: m.device_time)
-            is_new = state["last_emitted"] is None or last.raw not in state["seen_raws"] or grew
-        elif unseen:
-            last = unseen[0]
-            is_new = True
-        elif grew:
-            last = self.batch[0]
-            is_new = True
-        else:
-            last = None
-            is_new = False
-        state["prev_batch_size"] = len(self.batch)
-        state["seen_raws"].update(m.raw for m in self.batch)
-        if last and is_new:
-            state["last_emitted"] = last
-            self.on_measurement(last)
-            out(f"Nouvelle mesure : {last.display()} — copiée dans le presse-papiers.")
-        else:
-            out("Lot déjà traité — pas de nouvelle mesure.")
+        candidate = next((m for m in reversed(self.batch) if 30.0 <= m.temperature_c <= 43.0), None)
+        if candidate is None:
+            candidate = self.batch[-1]
+        self.on_measurement(candidate)
 
     def run_cycles(
         self,
@@ -215,17 +198,40 @@ class FT95Watcher:
         wait_first: float = 20.0,
         collect: float = 8.0,
         free: float = 25.0,
+        address: Optional[str] = None,
     ) -> None:
-        """Boucle de cycles. Chaque cycle tourne dans son propre event loop :
-        contourne le bug bleak/WinRT ('Thread is configured for Windows GUI') qui
-        fait planter les scans successifs dans une même boucle asyncio.
+        """Boucle de cycles. Chaque cycle tourne dans un sous-processus Python tout
+        neuf (comme scan.py dans le projet miscale) : seul moyen fiable de contourner
+        le bug bleak/WinRT ('Thread is configured for Windows GUI') sous Windows.
         """
+        import json
+        import subprocess
         import time
+        from datetime import datetime
 
-        state = {"last_emitted": None, "seen_raws": set(), "prev_batch_size": 0}
+        state = {"seen": set(), "prev_size": 0}
+        cmd = [sys.executable, "-u", "-m", "ft95.onecycle",
+               "--wait-first", str(wait_first), "--collect", str(collect)]
+        if address:
+            cmd += ["--address", address]
         while True:
             try:
-                asyncio.run(self._one_cycle(out, wait_first, collect, state))
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                for line in proc.stdout.splitlines():
+                    if line.startswith("FT95CAND "):
+                        obj = json.loads(line[len("FT95CAND "):])
+                        cand = Measurement(obj["temperature_c"], datetime.now(), obj["raw"], obj.get("source", ""))
+                        grew = obj.get("size", 0) > state["prev_size"]
+                        is_new = obj["raw"] not in state["seen"] or grew
+                        state["prev_size"] = max(state["prev_size"], obj.get("size", 0))
+                        state["seen"].add(obj["raw"])
+                        if is_new:
+                            self.on_measurement(cand)
+                            out(f"Nouvelle mesure : {cand.display()} — copiée dans le presse-papiers.")
+                        else:
+                            out("Lot déjà traité — pas de nouvelle mesure.")
+                    elif line.strip():
+                        out(line)
             except KeyboardInterrupt:
                 return
             except Exception as exc:
