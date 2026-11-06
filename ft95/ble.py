@@ -88,17 +88,32 @@ class FT95Watcher:
             return
         out(f"Connecté à {device.name} ({device.address})")
         async with BleakClient(device) as client:
+            try:
+                if await client.pair():
+                    out("Jumelage Bluetooth réussi.")
+            except Exception as exc:
+                out(f"Jumelage impossible ({exc}) — jumelez le FT95 dans les paramètres Bluetooth de Windows si les mesures n'arrivent pas.")
             targets: List[str] = []
             for service in client.services:
                 for char in service.characteristics:
                     props = char.properties
+                    if char.uuid.lower() == "00002a05-0000-1000-8000-00805f9b34fb":
+                        continue
                     if "indicate" in props or "notify" in props:
                         targets.append(char.uuid)
             if not targets:
                 out("Aucune caractéristique notifiable trouvée.")
                 return
             out(f"Écoute de {len(targets)} caractéristique(s) : {', '.join(targets)}")
+            active = 0
             for uuid in targets:
-                await client.start_notify(uuid, lambda d, data, u=uuid: asyncio.ensure_future(self._handle(u, data)))
+                try:
+                    await client.start_notify(uuid, lambda d, data, u=uuid: asyncio.ensure_future(self._handle(u, data)))
+                    active += 1
+                except Exception as exc:
+                    out(f"Écoute impossible sur {uuid} : {exc}")
+            if active == 0:
+                out("Aucune écoute possible : jumelez le FT95 dans les paramètres Bluetooth de Windows, puis relancez.")
+                return
             while True:
                 await asyncio.sleep(1)

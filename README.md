@@ -32,7 +32,14 @@ pip install -e .
 
 ## Utilisation
 
-### 1. Identifier le thermomètre
+### 1. Jumeler le thermomètre (requis par le FT95)
+
+Le FT95 exige un jumelage (PIN à 6 chiffres affiché sur son écran) :
+
+1. Paramètres Windows → Bluetooth et appareils → Ajouter un appareil → Bluetooth.
+2. Sélectionnez **FT95**, saisissez le PIN affiché sur le thermomètre.
+
+### 2. Identifier le thermomètre
 
 Allumez le FT95 (mode Bluetooth actif), puis :
 
@@ -42,7 +49,7 @@ ft95 scan
 
 Repérez la ligne avec `<-- probable FT95` (nom du type `FT95` / `Beurer…`) et notez l'adresse MAC.
 
-### 2. Lancer l'affichage
+### 3. Lancer l'affichage
 
 ```bash
 ft95 watch
@@ -64,7 +71,7 @@ Sans fenêtre (console seule) :
 ft95 watch --no-gui
 ```
 
-### 3. Historique
+### 4. Historique
 
 ```bash
 ft95 last            # 10 dernières mesures
