@@ -46,6 +46,26 @@ def decode_health_thermometer(data: bytes) -> Optional[float]:
     return decode_ieee11073_32bit(data[1:5])
 
 
+def extract_timestamp(data: bytes) -> Optional[datetime]:
+    """Extrait l'horodatage optionnel d'une trame 0x2A1C (flags bit1)."""
+    if len(data) < 12 or not (data[0] & 0x02):
+        return None
+    year = int.from_bytes(data[5:7], "little")
+    if year == 0:
+        return None
+    try:
+        return datetime(
+            year,
+            data[7],
+            data[8],
+            data[9],
+            data[10],
+            data[11],
+        )
+    except ValueError:
+        return None
+
+
 def decode_heuristic(data: bytes) -> Optional[float]:
     """Cherche une température plausible encodée en little-endian (x100 ou x10).
 

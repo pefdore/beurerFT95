@@ -9,7 +9,7 @@ from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
-from .decode import Measurement, decode_health_thermometer, decode_heuristic, make_measurement
+from .decode import Measurement, decode_health_thermometer, decode_heuristic, extract_timestamp, make_measurement
 
 HEALTH_THERMOMETER_SERVICE = "00001809-0000-1000-8000-00805f9b34fb"
 TEMPERATURE_MEASUREMENT_CHAR = "00002a1c-0000-1000-8000-00805f9b34fb"
@@ -67,6 +67,9 @@ class FT95Watcher:
         self.on_measurement = on_measurement
         self.heuristic = heuristic
         self.log_raw = log_raw
+        self.batching = False
+        self.batch: List[Measurement] = []
+        self._first_item: Optional[asyncio.Event] = None
 
     async def _handle(self, char_uuid: str, data: bytes) -> None:
         if self.log_raw:
@@ -79,7 +82,16 @@ class FT95Watcher:
             temp = decode_heuristic(data)
             source = "heuristique"
         if temp is not None:
-            self.on_measurement(make_measurement(temp, data, source))
+            m = make_measurement(temp, data, source)
+            if self.batching:
+                ts = extract_timestamp(data)
+                self.batch.append(m)
+                if ts:
+                    self.batch[-1] = Measurement(m.temperature_c, ts, m.raw, m.source)
+                if self._first_item:
+                    self._first_item.set()
+            else:
+                self.on_measurement(m)
 
     async def run_forever(self, out=print) -> None:
         """Boucle : se connecte, attend UNE mesure, se déconnecte, puis recommence.
@@ -96,12 +108,9 @@ class FT95Watcher:
             out(f"Connecté à {device.name} ({device.address}) — en attente d'une mesure…")
             received = asyncio.Event()
             prev = self.on_measurement
-
-            def wrapped(m) -> None:
-                prev(m)
-                received.set()
-
-            self.on_measurement = wrapped
+            self._first_item = received
+            self.batching = True
+            self.batch = []
             try:
                 async with BleakClient(device, disconnected_callback=lambda c: received.set()) as client:
                     targets: List[str] = []
@@ -125,11 +134,24 @@ class FT95Watcher:
                         continue
                     try:
                         await asyncio.wait_for(received.wait(), timeout=120)
-                        out("Mesure reçue — déconnexion pour libérer le thermomètre…")
+                        deadline = asyncio.get_event_loop().time() + 8.0
+                        while asyncio.get_event_loop().time() < deadline:
+                            n = len(self.batch)
+                            await asyncio.sleep(2)
+                            if len(self.batch) == n:
+                                break
+                        stamped = [m for m in self.batch if m.timestamp.year > 2000]
+                        last = max(stamped, key=lambda m: m.timestamp) if stamped else (self.batch[-1] if self.batch else None)
+                        out(f"Lot reçu : {len(self.batch)} valeur(s) — seule la plus récente est affichée.")
+                        if last:
+                            prev(last)
+                        out("Déconnexion pour libérer le thermomètre…")
                     except asyncio.TimeoutError:
                         out("Aucune mesure en 120s — reconnexion…")
             except Exception as exc:
                 out(f"Connexion perdue ({exc}) — nouvelle tentative dans 5s…")
             finally:
-                self.on_measurement = prev
+                self._first_item = None
+                self.batching = False
+                self.batch = []
             await asyncio.sleep(2)
