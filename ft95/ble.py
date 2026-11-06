@@ -102,6 +102,7 @@ class FT95Watcher:
         """
         last_emitted: Optional[Measurement] = None
         seen_raws: set = set()
+        prev_batch_size = 0
         while True:
             device = await self.device_provider()
             if not device:
@@ -135,29 +136,35 @@ class FT95Watcher:
                         await asyncio.sleep(5)
                         continue
                     try:
-                        await asyncio.wait_for(received.wait(), timeout=15)
-                        deadline = asyncio.get_event_loop().time() + 8.0
+                        await asyncio.wait_for(received.wait(), timeout=8)
+                        deadline = asyncio.get_event_loop().time() + 6.0
                         while asyncio.get_event_loop().time() < deadline:
                             n = len(self.batch)
-                            await asyncio.sleep(2)
+                            await asyncio.sleep(1.5)
                             if len(self.batch) == n:
                                 break
+                        out("Lot reçu : " + ", ".join(f"{m.temperature_c:.1f}" for m in self.batch))
                         stamped = [m for m in self.batch if m.device_time is not None]
+                        unseen = [m for m in self.batch if m.raw not in seen_raws]
+                        grew = len(self.batch) > prev_batch_size
                         if stamped:
                             last = max(stamped, key=lambda m: m.device_time)
-                            is_new = last_emitted is None or last.raw not in seen_raws
+                            is_new = last_emitted is None or last.raw not in seen_raws or grew
+                        elif unseen:
+                            last = unseen[0]
+                            is_new = True
+                        elif grew:
+                            last = self.batch[0]
+                            is_new = True
                         else:
-                            unseen = [m for m in self.batch if m.raw not in seen_raws]
-                            last = unseen[0] if unseen else None
-                            is_new = last is not None
+                            last = None
+                            is_new = False
+                        prev_batch_size = len(self.batch)
                         seen_raws.update(m.raw for m in self.batch)
-                        out(f"Lot reçu : {len(self.batch)} valeur(s).")
                         if last and is_new:
                             last_emitted = last
                             self.on_measurement(last)
                             out(f"Nouvelle mesure : {last.display()} — copiée dans le presse-papiers.")
-                        elif last:
-                            out("Lot déjà traité — pas de nouvelle mesure.")
                         elif self.batch:
                             out("Lot déjà traité — pas de nouvelle mesure.")
                     except asyncio.TimeoutError:
