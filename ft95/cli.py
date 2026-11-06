@@ -156,6 +156,44 @@ def cmd_watch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_ble(on_measurement, address=None, out=print) -> None:
+    async def resolve_device():
+        if address:
+            from bleak import BleakScanner
+
+            d = await BleakScanner.find_device_by_address(address, timeout=15.0)
+            if not d:
+                raise SystemExit(f"Aucun appareil à l'adresse {address}. Lancez 'ft95 scan'.")
+            return d
+        d = await find_ft95()
+        if not d:
+            raise SystemExit("FT95 introuvable. Allumez-le (ou prenez une mesure) et relancez, ou 'ft95 scan'.")
+        return d
+
+    watcher = FT95Watcher(resolve_device, on_measurement)
+    try:
+        asyncio.run(watcher.run_forever(out=out))
+    except Exception as exc:
+        print(f"BLE arrêté : {exc}", file=sys.stderr)
+
+
+def cmd_widget(args: argparse.Namespace) -> int:
+    from .widget import run_widget
+
+    store = get_store()
+
+    def ble_target(q):
+        def on_measurement(m):
+            store.save(m)
+            copy_text(f"{m.temperature_c:.1f}")
+            q.put(f"{m.temperature_c:.1f}")
+
+        _run_ble(on_measurement, address=args.address)
+
+    run_widget(ble_target)
+    return 0
+
+
 def cmd_manual(args: argparse.Namespace) -> int:
     store = get_store()
     m = make_measurement(args.temperature, b"", "saisie-manuelle")
@@ -203,6 +241,10 @@ def main(argv=None) -> int:
     p.add_argument("--address", dest="address_opt", help="Adresse MAC du FT95 (si le nom n'est pas détecté).")
     p.add_argument("--no-gui", action="store_true", help="Affichage en console uniquement.")
     p.set_defaults(func=cmd_watch)
+
+    p = sub.add_parser("widget", help="Widget rond bleu (style miscale) : dernière température au premier plan.")
+    p.add_argument("address", nargs="?", help="Adresse MAC du FT95 (optionnelle).")
+    p.set_defaults(func=cmd_widget)
 
     p = sub.add_parser("manual", help="Enregistre une température saisie à la main (ex: 38.2).")
     p.add_argument("temperature", type=float)
