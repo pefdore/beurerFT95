@@ -51,9 +51,24 @@ Repérez la ligne avec `<-- probable FT95` (nom du type `FT95` / `Beurer…`) et
 
 ### 3. Lancer l'affichage
 
+Deux modes :
+
 ```bash
-ft95 watch
+ft95 widget     # pastille ronde bleue (style miscale), toujours au premier plan
+ft95 watch      # grande fenêtre avec historique
+ft95 watch --no-gui   # console uniquement (utile pour diagnostiquer)
 ```
+
+Fonctionnement automatique (cycle) : le programme se connecte au FT95, reçoit le
+lot de mesures, affiche **la plus récente** et la copie dans le presse-papiers,
+puis se déconnecte pour **libérer le thermomètre** (~25 s) avant de recommencer.
+Prenez vos mesures pendant les fenêtres « Thermomètre libéré ».
+
+Chaque cycle s'exécute dans un sous-processus Python neuf (contournement d'un bug
+bleak/WinRT sous Windows) : un échec n'interrompt jamais le programme, qui
+réessaie automatiquement.
+
+Temporisations réglables : `--wait-first 20 --collect 8 --free 25`.
 
 La fenêtre s'ouvre, le programme se connecte au FT95. Prenez une température : elle apparaît
 immédiatement en grand sur l'écran et est copiée dans le presse-papiers — de retour sur votre
