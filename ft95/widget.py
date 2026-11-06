@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
-WIDGET_SIZE = 64
+WIDGET_SIZE = 40
 COLOR_BACKGROUND = "#00264c"
 COLOR_CONTOUR = "white"
 COLOR_TEXT = "white"
