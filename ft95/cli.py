@@ -39,6 +39,33 @@ def cmd_gatt(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pair(args: argparse.Namespace) -> int:
+    async def run() -> None:
+        from bleak import BleakScanner
+
+        if args.address:
+            device = await BleakScanner.find_device_by_address(args.address, timeout=15.0)
+        else:
+            device = await find_ft95()
+        if not device:
+            print("FT95 introuvable. Allumez-le (ou prenez une mesure) et relancez, ou essayez 'ft95 scan'.")
+            return
+        print(f"Connexion à {device.name} ({device.address})…")
+        from bleak import BleakClient
+
+        async with BleakClient(device) as client:
+            try:
+                if await client.pair():
+                    print("Jumelage réussi. Vous pouvez lancer 'ft95 watch'.")
+                else:
+                    print("Jumelage refusé par l'appareil.")
+            except Exception as exc:
+                print(f"Échec du jumelage : {exc}")
+
+    asyncio.run(run())
+    return 0
+
+
 def cmd_spy(args: argparse.Namespace) -> int:
     async def run() -> None:
         device = await find_ft95()
@@ -163,6 +190,10 @@ def main(argv=None) -> int:
     p = sub.add_parser("gatt", help="Liste les services/caractéristiques d'un appareil.")
     p.add_argument("address")
     p.set_defaults(func=cmd_gatt)
+
+    p = sub.add_parser("pair", help="Jumelle le FT95 (équivaut à l'ajout d'appareil Windows).")
+    p.add_argument("address", nargs="?", help="Adresse MAC du FT95 (optionnelle).")
+    p.set_defaults(func=cmd_pair)
 
     p = sub.add_parser("spy", help="Affiche les trames brutes du FT95 (reverse-engineering).")
     p.set_defaults(func=cmd_spy)
