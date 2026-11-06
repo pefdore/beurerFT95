@@ -93,21 +93,22 @@ class FT95Watcher:
             else:
                 self.on_measurement(m)
 
-    async def run_forever(self, out=print) -> None:
-        """Boucle : se connecte, attend UNE mesure, se déconnecte, puis recommence.
+    async def run_forever(self, out=print, wait_after_emit: float = 10.0) -> None:
+        """Boucle : se connecte, collecte le lot envoyé par le FT95, n'affiche que la
+        mesure la plus récente, se déconnecte, puis attend la mesure suivante.
 
-        Le FT95 ne peut pas mesurer pendant qu'il est connecté et ne re-pousse pas une
-        mesure déjà envoyée : il faut donc le libérer après chaque mesure.
+        Le FT95 ne peut pas mesurer pendant qu'il est connecté : il faut donc rester
+        connecté le moins longtemps possible et ignorer les lots déjà traités.
         """
+        last_emitted: Optional[Measurement] = None
         while True:
             device = await self.device_provider()
             if not device:
                 out("FT95 introuvable, nouvelle tentative dans 5s…")
                 await asyncio.sleep(5)
                 continue
-            out(f"Connecté à {device.name} ({device.address}) — en attente d'une mesure…")
+            out(f"Connecté à {device.name} ({device.address}) — réception du lot…")
             received = asyncio.Event()
-            prev = self.on_measurement
             self._first_item = received
             self.batching = True
             self.batch = []
@@ -133,7 +134,7 @@ class FT95Watcher:
                         await asyncio.sleep(5)
                         continue
                     try:
-                        await asyncio.wait_for(received.wait(), timeout=120)
+                        await asyncio.wait_for(received.wait(), timeout=15)
                         deadline = asyncio.get_event_loop().time() + 8.0
                         while asyncio.get_event_loop().time() < deadline:
                             n = len(self.batch)
@@ -142,16 +143,25 @@ class FT95Watcher:
                                 break
                         stamped = [m for m in self.batch if m.timestamp.year > 2000]
                         last = max(stamped, key=lambda m: m.timestamp) if stamped else (self.batch[-1] if self.batch else None)
-                        out(f"Lot reçu : {len(self.batch)} valeur(s) — seule la plus récente est affichée.")
-                        if last:
-                            prev(last)
-                        out("Déconnexion pour libérer le thermomètre…")
+                        out(f"Lot reçu : {len(self.batch)} valeur(s).")
+                        is_new = last is not None and (
+                            last_emitted is None
+                            or (last.timestamp.year > 2000 and last.timestamp > last_emitted.timestamp)
+                            or (last.timestamp.year <= 2000 and last.raw != last_emitted.raw)
+                        )
+                        if last and is_new:
+                            last_emitted = last
+                            self.on_measurement(last)
+                            out(f"Nouvelle mesure : {last.display()} — copiée dans le presse-papiers.")
+                        elif last:
+                            out("Lot déjà traité — pas de nouvelle mesure.")
                     except asyncio.TimeoutError:
-                        out("Aucune mesure en 120s — reconnexion…")
+                        out("Aucune donnée reçue — déconnexion.")
             except Exception as exc:
                 out(f"Connexion perdue ({exc}) — nouvelle tentative dans 5s…")
             finally:
                 self._first_item = None
                 self.batching = False
                 self.batch = []
-            await asyncio.sleep(2)
+            out("Thermomètre libéré — vous pouvez prendre une nouvelle mesure.")
+            await asyncio.sleep(wait_after_emit)
