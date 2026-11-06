@@ -85,9 +85,9 @@ class FT95Watcher:
             m = make_measurement(temp, data, source)
             if self.batching:
                 ts = extract_timestamp(data)
-                self.batch.append(m)
                 if ts:
-                    self.batch[-1] = Measurement(m.temperature_c, ts, m.raw, m.source)
+                    m.device_time = ts
+                self.batch.append(m)
                 if self._first_item:
                     self._first_item.set()
             else:
@@ -101,6 +101,7 @@ class FT95Watcher:
         connecté le moins longtemps possible et ignorer les lots déjà traités.
         """
         last_emitted: Optional[Measurement] = None
+        seen_raws: set = set()
         while True:
             device = await self.device_provider()
             if not device:
@@ -141,19 +142,23 @@ class FT95Watcher:
                             await asyncio.sleep(2)
                             if len(self.batch) == n:
                                 break
-                        stamped = [m for m in self.batch if m.timestamp.year > 2000]
-                        last = max(stamped, key=lambda m: m.timestamp) if stamped else (self.batch[-1] if self.batch else None)
+                        stamped = [m for m in self.batch if m.device_time is not None]
+                        if stamped:
+                            last = max(stamped, key=lambda m: m.device_time)
+                            is_new = last_emitted is None or last.raw not in seen_raws
+                        else:
+                            unseen = [m for m in self.batch if m.raw not in seen_raws]
+                            last = unseen[0] if unseen else None
+                            is_new = last is not None
+                        seen_raws.update(m.raw for m in self.batch)
                         out(f"Lot reçu : {len(self.batch)} valeur(s).")
-                        is_new = last is not None and (
-                            last_emitted is None
-                            or (last.timestamp.year > 2000 and last.timestamp > last_emitted.timestamp)
-                            or (last.timestamp.year <= 2000 and last.raw != last_emitted.raw)
-                        )
                         if last and is_new:
                             last_emitted = last
                             self.on_measurement(last)
                             out(f"Nouvelle mesure : {last.display()} — copiée dans le presse-papiers.")
                         elif last:
+                            out("Lot déjà traité — pas de nouvelle mesure.")
+                        elif self.batch:
                             out("Lot déjà traité — pas de nouvelle mesure.")
                     except asyncio.TimeoutError:
                         out("Aucune donnée reçue — déconnexion.")

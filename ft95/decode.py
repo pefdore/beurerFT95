@@ -12,6 +12,7 @@ class Measurement:
     timestamp: datetime
     raw: str
     source: str
+    device_time: Optional[datetime] = None
 
     def display(self) -> str:
         return f"{self.temperature_c:.1f} °C"
