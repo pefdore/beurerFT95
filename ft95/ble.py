@@ -136,7 +136,13 @@ class FT95Watcher:
             else:
                 self.on_measurement(m)
 
-    async def run_forever(self, out=print, wait_after_emit: float = 10.0) -> None:
+    async def run_forever(
+        self,
+        out=print,
+        wait_first: float = 20.0,
+        collect: float = 8.0,
+        free: float = 25.0,
+    ) -> None:
         """Boucle : se connecte, collecte le lot envoyé par le FT95, n'affiche que la
         mesure la plus récente, se déconnecte, puis attend la mesure suivante.
 
@@ -179,9 +185,9 @@ class FT95Watcher:
                         await asyncio.sleep(5)
                         continue
                     try:
-                        await asyncio.wait_for(received.wait(), timeout=30)
-                        out(f"Première valeur reçue, réception du lot…")
-                        deadline = asyncio.get_event_loop().time() + 10.0
+                        await asyncio.wait_for(received.wait(), timeout=wait_first)
+                        out("Première valeur reçue, réception du lot…")
+                        deadline = asyncio.get_event_loop().time() + collect
                         while asyncio.get_event_loop().time() < deadline:
                             n = len(self.batch)
                             await asyncio.sleep(2)
@@ -220,4 +226,4 @@ class FT95Watcher:
                 self.batching = False
                 self.batch = []
             out("Thermomètre libéré — vous pouvez prendre une nouvelle mesure.")
-            await asyncio.sleep(wait_after_emit)
+            await asyncio.sleep(free)

@@ -138,9 +138,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
             copy_text(f"{m.temperature_c:.1f}")
             print(f"Mesure : {m.display()} à {m.timestamp.strftime('%H:%M:%S')} — copiée dans le presse-papiers")
 
+        timings = {"wait_first": args.wait_first, "collect": args.collect, "free": args.free}
         watcher = FT95Watcher(resolve_device, on_measurement)
         try:
-            asyncio.run(watcher.run_forever())
+            asyncio.run(watcher.run_forever(**timings))
         except KeyboardInterrupt:
             pass
         return 0
@@ -155,8 +156,9 @@ def cmd_watch(args: argparse.Namespace) -> int:
             def on_measurement(m: Measurement) -> None:
                 q.put(m)
 
+            timings = {"wait_first": args.wait_first, "collect": args.collect, "free": args.free}
             watcher = FT95Watcher(resolve_device, on_measurement)
-            await watcher.run_forever()
+            await watcher.run_forever(**timings)
 
         try:
             asyncio.run(run())
@@ -181,7 +183,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_ble(on_measurement, address=None, out=print) -> None:
+def _run_ble(on_measurement, address=None, out=print, timings=None) -> None:
     async def resolve_device():
         if address:
             from bleak import BleakScanner
@@ -197,7 +199,7 @@ def _run_ble(on_measurement, address=None, out=print) -> None:
 
     watcher = FT95Watcher(resolve_device, on_measurement)
     try:
-        asyncio.run(watcher.run_forever(out=out))
+        asyncio.run(watcher.run_forever(out=out, **(timings or {})))
     except Exception as exc:
         print(f"BLE arrêté : {exc}", file=sys.stderr)
 
@@ -213,7 +215,8 @@ def cmd_widget(args: argparse.Namespace) -> int:
             copy_text(f"{m.temperature_c:.1f}")
             q.put(f"{m.temperature_c:.1f}")
 
-        _run_ble(on_measurement, address=args.address)
+        timings = {"wait_first": args.wait_first, "collect": args.collect, "free": args.free}
+        _run_ble(on_measurement, address=args.address, timings=timings)
 
     run_widget(ble_target)
     return 0
@@ -236,6 +239,12 @@ def cmd_last(args: argparse.Namespace) -> int:
     for m in reversed(ms):
         print(f"{m.timestamp.isoformat(timespec='seconds')}  {m.temperature_c:.1f} °C  ({m.source})")
     return 0
+
+
+def _add_timing_args(p) -> None:
+    p.add_argument("--wait-first", type=float, default=20.0, help="Attente max (s) de la 1re valeur après connexion.")
+    p.add_argument("--collect", type=float, default=8.0, help="Durée (s) de réception du lot.")
+    p.add_argument("--free", type=float, default=25.0, help="Durée (s) de libération du thermomètre entre les cycles.")
 
 
 def main(argv=None) -> int:
@@ -269,10 +278,12 @@ def main(argv=None) -> int:
     p.add_argument("address_pos", nargs="?", help="Adresse MAC du FT95 (optionnelle, positionnelle ou via --address).")
     p.add_argument("--address", dest="address_opt", help="Adresse MAC du FT95 (si le nom n'est pas détecté).")
     p.add_argument("--no-gui", action="store_true", help="Affichage en console uniquement.")
+    _add_timing_args(p)
     p.set_defaults(func=cmd_watch)
 
     p = sub.add_parser("widget", help="Widget rond bleu (style miscale) : dernière température au premier plan.")
     p.add_argument("address", nargs="?", help="Adresse MAC du FT95 (optionnelle).")
+    _add_timing_args(p)
     p.set_defaults(func=cmd_widget)
 
     p = sub.add_parser("manual", help="Enregistre une température saisie à la main (ex: 38.2).")
