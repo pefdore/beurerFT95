@@ -103,7 +103,7 @@ def cmd_spy(args: argparse.Namespace) -> int:
             print(f"[{char_uuid}] {data.hex(' ')}")
 
         watcher = FT95Watcher(lambda: asyncio.sleep(0, result=device), lambda m: None, heuristic=False, log_raw=log_raw)
-        await watcher.run_forever()
+        await watcher._one_cycle(print, wait_first=60, collect=10, state={"last_emitted": None, "seen_raws": set(), "prev_batch_size": 0})
 
     try:
         asyncio.run(run())
@@ -141,7 +141,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
         timings = {"wait_first": args.wait_first, "collect": args.collect, "free": args.free}
         watcher = FT95Watcher(resolve_device, on_measurement)
         try:
-            asyncio.run(watcher.run_forever(**timings))
+            watcher.run_cycles(**timings)
         except KeyboardInterrupt:
             pass
         return 0
@@ -152,16 +152,13 @@ def cmd_watch(args: argparse.Namespace) -> int:
     q: "queue.Queue[Measurement]" = queue.Queue()
 
     def ble_thread() -> None:
-        async def run() -> None:
-            def on_measurement(m: Measurement) -> None:
-                q.put(m)
+        def on_measurement(m: Measurement) -> None:
+            q.put(m)
 
-            timings = {"wait_first": args.wait_first, "collect": args.collect, "free": args.free}
-            watcher = FT95Watcher(resolve_device, on_measurement)
-            await watcher.run_forever(**timings)
-
+        timings = {"wait_first": args.wait_first, "collect": args.collect, "free": args.free}
+        watcher = FT95Watcher(resolve_device, on_measurement)
         try:
-            asyncio.run(run())
+            watcher.run_cycles(**timings)
         except Exception as exc:
             print(f"BLE arrêté : {exc}", file=sys.stderr)
 
@@ -199,7 +196,7 @@ def _run_ble(on_measurement, address=None, out=print, timings=None) -> None:
 
     watcher = FT95Watcher(resolve_device, on_measurement)
     try:
-        asyncio.run(watcher.run_forever(out=out, **(timings or {})))
+        watcher.run_cycles(out=out, **(timings or {}))
     except Exception as exc:
         print(f"BLE arrêté : {exc}", file=sys.stderr)
 

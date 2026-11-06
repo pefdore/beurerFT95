@@ -136,94 +136,100 @@ class FT95Watcher:
             else:
                 self.on_measurement(m)
 
-    async def run_forever(
+    async def _one_cycle(self, out, wait_first: float, collect: float, state: dict) -> None:
+        """Un cycle : connexion, réception du lot, sélection de la mesure la plus récente."""
+        device = await self.device_provider()
+        if not device:
+            out("FT95 introuvable, nouvelle tentative…")
+            return
+        out(f"Connecté à {device.name} ({device.address}) — réception du lot…")
+        received = asyncio.Event()
+        self._first_item = received
+        self.batching = True
+        self.batch = []
+        try:
+            async with BleakClient(device, disconnected_callback=lambda c: received.set()) as client:
+                targets: List[str] = []
+                for service in client.services:
+                    for char in service.characteristics:
+                        props = char.properties
+                        if char.uuid.lower() == "00002a05-0000-1000-8000-00805f9b34fb":
+                            continue
+                        if "indicate" in props or "notify" in props:
+                            targets.append(char.uuid)
+                active = 0
+                for uuid in targets:
+                    try:
+                        await client.start_notify(uuid, lambda d, data, u=uuid: asyncio.ensure_future(self._handle(u, data)))
+                        active += 1
+                    except Exception as exc:
+                        out(f"Écoute impossible sur {uuid} : {exc}")
+                if active == 0:
+                    out("Aucune écoute possible : réessayez, ou jumelez le FT95 dans les paramètres Bluetooth.")
+                    return
+                try:
+                    await asyncio.wait_for(received.wait(), timeout=wait_first)
+                    out("Première valeur reçue, réception du lot…")
+                    deadline = asyncio.get_event_loop().time() + collect
+                    while asyncio.get_event_loop().time() < deadline:
+                        n = len(self.batch)
+                        await asyncio.sleep(2)
+                        if len(self.batch) == n:
+                            break
+                except asyncio.TimeoutError:
+                    out("Aucune donnée reçue — déconnexion.")
+                    return
+        finally:
+            self._first_item = None
+            self.batching = False
+        if not self.batch:
+            return
+        out("Lot reçu : " + ", ".join(f"{m.temperature_c:.1f}" for m in self.batch))
+        stamped = [m for m in self.batch if m.device_time is not None]
+        unseen = [m for m in self.batch if m.raw not in state["seen_raws"]]
+        grew = len(self.batch) > state["prev_batch_size"]
+        if stamped:
+            last = max(stamped, key=lambda m: m.device_time)
+            is_new = state["last_emitted"] is None or last.raw not in state["seen_raws"] or grew
+        elif unseen:
+            last = unseen[0]
+            is_new = True
+        elif grew:
+            last = self.batch[0]
+            is_new = True
+        else:
+            last = None
+            is_new = False
+        state["prev_batch_size"] = len(self.batch)
+        state["seen_raws"].update(m.raw for m in self.batch)
+        if last and is_new:
+            state["last_emitted"] = last
+            self.on_measurement(last)
+            out(f"Nouvelle mesure : {last.display()} — copiée dans le presse-papiers.")
+        else:
+            out("Lot déjà traité — pas de nouvelle mesure.")
+
+    def run_cycles(
         self,
         out=print,
         wait_first: float = 20.0,
         collect: float = 8.0,
         free: float = 25.0,
     ) -> None:
-        """Boucle : se connecte, collecte le lot envoyé par le FT95, n'affiche que la
-        mesure la plus récente, se déconnecte, puis attend la mesure suivante.
-
-        Le FT95 ne peut pas mesurer pendant qu'il est connecté : il faut donc rester
-        connecté le moins longtemps possible et ignorer les lots déjà traités.
+        """Boucle de cycles. Chaque cycle tourne dans son propre event loop :
+        contourne le bug bleak/WinRT ('Thread is configured for Windows GUI') qui
+        fait planter les scans successifs dans une même boucle asyncio.
         """
-        last_emitted: Optional[Measurement] = None
-        seen_raws: set = set()
-        prev_batch_size = 0
+        import time
+
+        state = {"last_emitted": None, "seen_raws": set(), "prev_batch_size": 0}
         while True:
-            device = await self.device_provider()
-            if not device:
-                out("FT95 introuvable, nouvelle tentative dans 5s…")
-                await asyncio.sleep(5)
-                continue
-            out(f"Connecté à {device.name} ({device.address}) — réception du lot…")
-            received = asyncio.Event()
-            self._first_item = received
-            self.batching = True
-            self.batch = []
             try:
-                async with BleakClient(device, disconnected_callback=lambda c: received.set()) as client:
-                    targets: List[str] = []
-                    for service in client.services:
-                        for char in service.characteristics:
-                            props = char.properties
-                            if char.uuid.lower() == "00002a05-0000-1000-8000-00805f9b34fb":
-                                continue
-                            if "indicate" in props or "notify" in props:
-                                targets.append(char.uuid)
-                    active = 0
-                    for uuid in targets:
-                        try:
-                            await client.start_notify(uuid, lambda d, data, u=uuid: asyncio.ensure_future(self._handle(u, data)))
-                            active += 1
-                        except Exception as exc:
-                            out(f"Écoute impossible sur {uuid} : {exc}")
-                    if active == 0:
-                        out("Aucune écoute possible : réessayez, ou jumelez le FT95 dans les paramètres Bluetooth.")
-                        await asyncio.sleep(5)
-                        continue
-                    try:
-                        await asyncio.wait_for(received.wait(), timeout=wait_first)
-                        out("Première valeur reçue, réception du lot…")
-                        deadline = asyncio.get_event_loop().time() + collect
-                        while asyncio.get_event_loop().time() < deadline:
-                            n = len(self.batch)
-                            await asyncio.sleep(2)
-                            if len(self.batch) == n:
-                                break
-                        out("Lot reçu : " + ", ".join(f"{m.temperature_c:.1f}" for m in self.batch))
-                        stamped = [m for m in self.batch if m.device_time is not None]
-                        unseen = [m for m in self.batch if m.raw not in seen_raws]
-                        grew = len(self.batch) > prev_batch_size
-                        if stamped:
-                            last = max(stamped, key=lambda m: m.device_time)
-                            is_new = last_emitted is None or last.raw not in seen_raws or grew
-                        elif unseen:
-                            last = unseen[0]
-                            is_new = True
-                        elif grew:
-                            last = self.batch[0]
-                            is_new = True
-                        else:
-                            last = None
-                            is_new = False
-                        prev_batch_size = len(self.batch)
-                        seen_raws.update(m.raw for m in self.batch)
-                        if last and is_new:
-                            last_emitted = last
-                            self.on_measurement(last)
-                            out(f"Nouvelle mesure : {last.display()} — copiée dans le presse-papiers.")
-                        elif self.batch:
-                            out("Lot déjà traité — pas de nouvelle mesure.")
-                    except asyncio.TimeoutError:
-                        out("Aucune donnée reçue — déconnexion.")
+                asyncio.run(self._one_cycle(out, wait_first, collect, state))
+            except KeyboardInterrupt:
+                return
             except Exception as exc:
-                out(f"Connexion perdue ({exc}) — nouvelle tentative dans 5s…")
-            finally:
-                self._first_item = None
-                self.batching = False
-                self.batch = []
+                out(f"Cycle interrompu ({exc}) — nouvelle tentative dans 5s…")
+                time.sleep(5)
             out("Thermomètre libéré — vous pouvez prendre une nouvelle mesure.")
-            await asyncio.sleep(free)
+            time.sleep(free)
