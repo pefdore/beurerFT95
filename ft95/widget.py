@@ -76,9 +76,18 @@ class TempWidget(QWidget):
 
 
 def run_widget(ble_thread_target) -> None:
+    # Une seule instance : si une pastille tourne déjà, on quitte silencieusement.
+    from PySide6.QtNetwork import QLocalServer
+
+    app = QApplication(sys.argv)
+    if QLocalServer(name="ft95-widget").listen():
+        pass
+    else:
+        # Le serveur existe déjà : une instance tourne.
+        sys.exit(0)
+
     data_queue: "queue.Queue[str]" = queue.Queue()
     threading.Thread(target=ble_thread_target, args=(data_queue,), daemon=True).start()
-    app = QApplication(sys.argv)
     widget = TempWidget(data_queue)
     widget.show()
     sys.exit(app.exec())

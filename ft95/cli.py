@@ -173,9 +173,25 @@ def _run_ble(on_measurement, address=None, out=print, timings=None) -> None:
 
 
 def cmd_widget(args: argparse.Namespace) -> int:
+    import logging
+    import logging.handlers
+    import traceback
+
     from .widget import run_widget
 
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.handlers.RotatingFileHandler(DATA_DIR / "ft95.log", maxBytes=200_000, backupCount=2)],
+    )
+    log = logging.getLogger("ft95")
+    log.info("Demarrage du widget (args=%s)", vars(args))
+
     store = get_store()
+
+    def log_out(line: str) -> None:
+        log.info(line)
 
     def ble_target(q):
         def on_measurement(m):
@@ -184,9 +200,16 @@ def cmd_widget(args: argparse.Namespace) -> int:
             q.put(f"{m.temperature_c:.1f}")
 
         timings = {"wait_first": args.wait_first, "collect": args.collect, "free": args.free}
-        _run_ble(on_measurement, address=args.address, timings=timings)
+        try:
+            _run_ble(on_measurement, address=args.address, out=log_out, timings=timings)
+        except Exception:
+            log.error("BLE arrete :\n%s", traceback.format_exc())
 
-    run_widget(ble_target)
+    try:
+        run_widget(ble_target)
+    except Exception:
+        log.error("Widget arrete :\n%s", traceback.format_exc())
+        raise
     return 0
 
 
