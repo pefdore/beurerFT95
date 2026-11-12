@@ -80,10 +80,9 @@ def run_widget(ble_thread_target) -> None:
     from PySide6.QtNetwork import QLocalServer
 
     app = QApplication(sys.argv)
-    if QLocalServer(name="ft95-widget").listen():
-        pass
-    else:
-        # Le serveur existe déjà : une instance tourne.
+    server = QLocalServer()
+    if not server.listen("ft95-widget"):
+        # Le nom est déjà pris : une instance tourne déjà.
         sys.exit(0)
 
     data_queue: "queue.Queue[str]" = queue.Queue()
